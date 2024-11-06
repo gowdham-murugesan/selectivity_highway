@@ -11,57 +11,23 @@ namespace hwy
 {
     namespace HWY_NAMESPACE
     {
-        void SelectivityWithMask(const float *values, const float *selectivity, float *result, int min, int max, int size)
+        void SelectivityWithMask(const float *a, const float *b, float *c, const float *selectiveMask, int size)
         {
             const HWY_FULL(float) d;
-            auto allLow = Set(d, min);
-            auto allHigh = Set(d, max);
             auto allOne = Set(d, 1);
-            int row = 0;
-            for (; row < size; row += Lanes(d))
+            int i = 0;
+            for (; i < size; i += Lanes(d))
             {
-                auto data = LoadU(d, values + row);
-                auto ltMin = Lt(data, allLow);
-                auto gtMax = Gt(data, allHigh);
-                auto outOfRange = Or(ltMin, gtMax);
-                if (CountTrue(d, outOfRange) != 0)
-                    break;
-                auto selectivityVec = LoadU(d, selectivity + row);
-                auto selectivityMask = Eq(selectivityVec, allOne);
-                BlendedStore(data - allLow + allOne, selectivityMask, d, result + row);
+                auto VecA = LoadU(d, a + i);
+                auto VecB = LoadU(d, b + i);
+                auto selectivityVec = LoadU(d, selectiveMask + i);
+                auto selectivityMaskVec = Eq(selectivityVec, allOne);
+                BlendedStore(VecA + VecB, selectivityMaskVec, d, c + i);
             }
-            for (; row < size; row++)
+            for (; i < size; i++)
             {
-                auto value = values[row];
-                if (value > max || value < min)
-                    break;
-                result[row] = selectivity[row] ? value - min + 1 : result[row];
-            }
-        }
-
-        void SelectivityWithOutMask(const float *values, const float *selectivity, float *result, int min, int max, int size)
-        {
-            const HWY_FULL(float) d;
-            auto allLow = Set(d, min);
-            auto allHigh = Set(d, max);
-            auto allOne = Set(d, 1);
-            int row = 0;
-            for (; row < size; row += Lanes(d))
-            {
-                auto data = LoadU(d, values + row);
-                auto ltMin = Lt(data, allLow);
-                auto gtMax = Gt(data, allHigh);
-                auto outOfRange = Or(ltMin, gtMax);
-                if (CountTrue(d, outOfRange) != 0)
-                    break;
-                StoreU(data - allLow + allOne, d, result + row);
-            }
-            for (; row < size; row++)
-            {
-                auto value = values[row];
-                if (value > max || value < min)
-                    break;
-                result[row] = value - min + 1;
+                if (selectiveMask[i])
+                    c[i] = a[i] + b[i];
             }
         }
     }
@@ -70,85 +36,64 @@ HWY_AFTER_NAMESPACE();
 
 #if HWY_ONCE
 
-const int min = 0, max = 1000;
 namespace hwy
 {
     HWY_EXPORT(SelectivityWithMask);
-    void SelectivityWithMaskCall(const float *values, const float *selectivity, float *result, int size)
+    void SelectivityWithMaskCall(const float *a, const float *b, float *c, const float *selectiveMask, int size)
     {
         HWY_DYNAMIC_DISPATCH(SelectivityWithMask)
-        (values, selectivity, result, min, max, size);
-    }
-
-    HWY_EXPORT(SelectivityWithOutMask);
-    void SelectivityWithOutMaskCall(const float *values, const float *selectivity, float *result, int size)
-    {
-        HWY_DYNAMIC_DISPATCH(SelectivityWithOutMask)
-        (values, selectivity, result, min, max, size);
+        (a, b, c, selectiveMask, size);
     }
 }
 
-void SelectivityWithMaskNormal(const float *values, const float *selectivity, float *result, int min, int max, int size)
-{
-    for (int row = 0; row < size; row++)
-    {
-        float value = values[row];
-        if (value < min || value > max)
-            break;
-        result[row] = selectivity[row] ? value - min + 1 : result[row];
-    }
-}
-
-
-const int size = 100000;
-
-void inputGen(float *values, float *selectivity)
+void SelectivityWithMaskNormal(const float *a, const float *b, float *c, const float *selectiveMask, int size)
 {
     for (int i = 0; i < size; i++)
     {
-        values[i] = i % 1000;
-        selectivity[i] = i != (i % 3);
+        if (selectiveMask[i])
+            c[i] = a[i] + b[i];
+    }
+}
+
+const int size = 100000;
+
+void inputGen(float *a, float *b, float *selectiveMask)
+{
+    for (int i = 0; i < size; i++)
+    {
+        a[i] = i % 1000;
+        b[i] = i % 100;
+        selectiveMask[i] = i != (i % 3);
     }
 }
 
 static void SelectivityWithMaskHighwayBenchmark(benchmark::State &state)
 {
-    float values[size];
-    float selectivity[size];
-    float result[size] = {0};
-    inputGen(values, selectivity);
+    float a[size], b[size];
+    float selectiveMask[size];
+    float c[size] = {0};
+    inputGen(a, b, selectiveMask);
     for (auto _ : state)
     {
-        hwy::SelectivityWithMaskCall(values, selectivity, result, size);
+        hwy::SelectivityWithMaskCall(a, b, c, selectiveMask, size);
     }
-}
-
-static void SelectivityWithOutMaskHighwayBenchmark(benchmark::State &state)
-{
-    float values[size];
-    float selectivity[size];
-    float result[size] = {0};
-    inputGen(values, selectivity);
-    for (auto _ : state)
-    {
-        hwy::SelectivityWithOutMaskCall(values, selectivity, result, size);
-    }
+    benchmark::DoNotOptimize(c);
 }
 
 static void SelectivityWithMaskNormalBenchmark(benchmark::State &state)
 {
-    float values[size];
-    float selectivity[size];
-    float result[size] = {0};
-    inputGen(values, selectivity);
+    float a[size], b[size];
+    float selectiveMask[size];
+    float c[size] = {0};
+    inputGen(a, b, selectiveMask);
     for (auto _ : state)
     {
-        SelectivityWithMaskNormal(values, selectivity, result, min, max, size);
+        SelectivityWithMaskNormal(a, b, c, selectiveMask, size);
     }
+    benchmark::DoNotOptimize(c);
 }
 
 BENCHMARK(SelectivityWithMaskHighwayBenchmark);
-BENCHMARK(SelectivityWithOutMaskHighwayBenchmark);
 BENCHMARK(SelectivityWithMaskNormalBenchmark);
 BENCHMARK_MAIN();
 #endif
