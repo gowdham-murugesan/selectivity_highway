@@ -63,7 +63,7 @@ void inputGen(float *a, float *b, float *selectiveMask)
     {
         a[i] = i % 1000;
         b[i] = i % 100;
-        selectiveMask[i] = i != (i % 3);
+        selectiveMask[i] = (i % 3) != 0;
     }
 }
 
