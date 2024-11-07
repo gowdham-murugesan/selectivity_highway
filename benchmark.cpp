@@ -1,5 +1,7 @@
 #include <iostream>
 #include <vector>
+#include <random>
+#include <algorithm>
 #undef HWY_TARGET_INCLUDE
 #define HWY_TARGET_INCLUDE "benchmark.cpp"
 #include <hwy/foreach_target.h>
@@ -11,23 +13,28 @@ namespace hwy
 {
     namespace HWY_NAMESPACE
     {
-        void SelectivityWithMask(const float *a, const float *b, float *c, const float *selectiveMask, int size)
+
+        void SelectivityWithGatherScatter(const float *a, const float *b, float *c, const int *selectiveIndices, int numIndices, int size)
         {
-            const HWY_FULL(float) d;
-            auto allOne = Set(d, 1);
+            const HWY_FULL(float) df;
+            const HWY_FULL(int) di;
+            const int lanes = Lanes(df);
+
             int i = 0;
-            for (; i < size; i += Lanes(d))
+            for (; i <= numIndices - lanes; i += lanes)
             {
-                auto VecA = LoadU(d, a + i);
-                auto VecB = LoadU(d, b + i);
-                auto selectivityVec = LoadU(d, selectiveMask + i);
-                auto selectivityMaskVec = Eq(selectivityVec, allOne);
-                BlendedStore(VecA + VecB, selectivityMaskVec, d, c + i);
+                auto indices = LoadU(di, selectiveIndices + i);
+                auto VecA = GatherIndex(df, a, indices);
+                auto VecB = GatherIndex(df, b, indices);
+
+                auto result = VecA + VecB;
+
+                ScatterIndex(result, df, c, indices);
             }
-            for (; i < size; i++)
+            for (; i < numIndices; i++)
             {
-                if (selectiveMask[i])
-                    c[i] = a[i] + b[i];
+                int index = selectiveIndices[i];
+                c[index] = a[index] + b[index];
             }
         }
     }
@@ -35,65 +42,81 @@ namespace hwy
 HWY_AFTER_NAMESPACE();
 
 #if HWY_ONCE
-
 namespace hwy
 {
-    HWY_EXPORT(SelectivityWithMask);
-    void SelectivityWithMaskCall(const float *a, const float *b, float *c, const float *selectiveMask, int size)
+    HWY_EXPORT(SelectivityWithGatherScatter);
+    void SelectivityWithGatherScatterCall(const float *a, const float *b, float *c, const int *selectiveIndices, int numIndices, int size)
     {
-        HWY_DYNAMIC_DISPATCH(SelectivityWithMask)
-        (a, b, c, selectiveMask, size);
+        HWY_DYNAMIC_DISPATCH(SelectivityWithGatherScatter)
+        (a, b, c, selectiveIndices, numIndices, size);
     }
 }
 
-void SelectivityWithMaskNormal(const float *a, const float *b, float *c, const float *selectiveMask, int size)
+void SelectivityWithNormal(const float *a, const float *b, float *c, const int *selectiveIndices, int numIndices, int size)
 {
+    for (int i = 0; i < numIndices; i++)
+    {
+        int index = selectiveIndices[i];
+        c[index] = a[index] + b[index];
+    }
+}
+
+const int size = 4000;
+
+void generateInputs(float *a, float *b, int *selectiveIndices, int &numIndices, int size, float selectivityPercent)
+{
+    std::mt19937 rng(std::random_device{}());
+    std::uniform_real_distribution<float> distFloat(0.0f, 100.0f);
+    std::uniform_int_distribution<int> distIndex(0, size - 1);
+
     for (int i = 0; i < size; i++)
     {
-        if (selectiveMask[i])
-            c[i] = a[i] + b[i];
+        a[i] = distFloat(rng);
+        b[i] = distFloat(rng);
     }
-}
 
-const int size = 100000;
+    numIndices = static_cast<int>(size * (selectivityPercent / 100.0f));
+    std::vector<int> indices(size);
+    std::iota(indices.begin(), indices.end(), 0);
+    std::shuffle(indices.begin(), indices.end(), rng);
 
-void inputGen(float *a, float *b, float *selectiveMask)
-{
-    for (int i = 0; i < size; i++)
+    for (int i = 0; i < numIndices; i++)
     {
-        a[i] = i % 1000;
-        b[i] = i % 100;
-        selectiveMask[i] = (i % 3) != 0;
+        selectiveIndices[i] = indices[i];
     }
+    std::sort(selectiveIndices, selectiveIndices + numIndices);
 }
 
-static void SelectivityWithMaskHighwayBenchmark(benchmark::State &state)
+static void SelectivityWithGatherScatterBenchmark(benchmark::State &state)
 {
-    float a[size], b[size];
-    float selectiveMask[size];
-    float c[size] = {0};
-    inputGen(a, b, selectiveMask);
+    float a[size], b[size], c[size] = {0};
+    int selectiveIndices[size];
+    int numIndices;
+
+    float selectivityPercent = state.range(0);
+    generateInputs(a, b, selectiveIndices, numIndices, size, selectivityPercent);
     for (auto _ : state)
     {
-        hwy::SelectivityWithMaskCall(a, b, c, selectiveMask, size);
+        hwy::SelectivityWithGatherScatterCall(a, b, c, selectiveIndices, numIndices, size);
+    }
+}
+
+static void SelectivityWithNormalBenchmark(benchmark::State &state)
+{
+    float a[size], b[size], c[size] = {0};
+    int selectiveIndices[size];
+    int numIndices;
+
+    float selectivityPercent = state.range(0);
+    generateInputs(a, b, selectiveIndices, numIndices, size, selectivityPercent);
+    for (auto _ : state)
+    {
+        SelectivityWithNormal(a, b, c, selectiveIndices, numIndices, size);
     }
     benchmark::DoNotOptimize(c);
 }
 
-static void SelectivityWithMaskNormalBenchmark(benchmark::State &state)
-{
-    float a[size], b[size];
-    float selectiveMask[size];
-    float c[size] = {0};
-    inputGen(a, b, selectiveMask);
-    for (auto _ : state)
-    {
-        SelectivityWithMaskNormal(a, b, c, selectiveMask, size);
-    }
-    benchmark::DoNotOptimize(c);
-}
-
-BENCHMARK(SelectivityWithMaskHighwayBenchmark);
-BENCHMARK(SelectivityWithMaskNormalBenchmark);
+BENCHMARK(SelectivityWithGatherScatterBenchmark)->Arg(10)->Arg(25)->Arg(50)->Arg(75)->Arg(100);
+BENCHMARK(SelectivityWithNormalBenchmark)->Arg(10)->Arg(25)->Arg(50)->Arg(75)->Arg(100);
 BENCHMARK_MAIN();
 #endif

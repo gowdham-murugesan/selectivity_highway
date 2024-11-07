@@ -1,5 +1,7 @@
 #include <iostream>
 #include <vector>
+#include <random>
+#include <algorithm>
 #undef HWY_TARGET_INCLUDE
 #define HWY_TARGET_INCLUDE "main.cpp"
 #include <hwy/foreach_target.h>
@@ -10,24 +12,32 @@ namespace hwy
 {
     namespace HWY_NAMESPACE
     {
-        void SelectivityWithMask(const float *a, const float *b, float *c, const float *selectiveMask, int size)
+
+        void SelectivityWithGatherScatter(const float *a, const float *b, float *c, const int *selectiveIndices, int numIndices, int size)
         {
-            const HWY_FULL(float) d;
-            auto allOne = Set(d, 1);
-            std::cout << Lanes(d) << std::endl;
+            const HWY_FULL(float) df;
+            const HWY_FULL(int) di;
+            const int lanes = Lanes(df);
+            std::cout << "Batch Size : " << lanes << std::endl;
+            
             int i = 0;
-            for (; i < size; i += Lanes(d))
+            for (; i <= numIndices - lanes; i += lanes)
             {
-                auto VecA = LoadU(d, a + i);
-                auto VecB = LoadU(d, b + i);
-                auto selectivityVec = LoadU(d, selectiveMask + i);
-                auto selectivityMaskVec = Eq(selectivityVec, allOne);
-                BlendedStore(VecA + VecB, selectivityMaskVec, d, c + i);
+                auto indices = LoadU(di, selectiveIndices + i);
+                auto VecA = GatherIndex(df, a, indices);
+                auto VecB = GatherIndex(df, b, indices);
+
+                auto result = VecA + VecB;
+
+                StoreU(result, df, c);
             }
-            for (; i < size; i++)
+            for (; i < numIndices; i++)
             {
-                if (selectiveMask[i])
-                    c[i] = a[i] + b[i];
+                int index = selectiveIndices[i];
+                if (index < size)
+                {
+                    c[i] = a[index] + b[index];
+                }
             }
         }
     }
@@ -35,39 +45,76 @@ namespace hwy
 HWY_AFTER_NAMESPACE();
 
 #if HWY_ONCE
-
 namespace hwy
 {
-    HWY_EXPORT(SelectivityWithMask);
-    void SelectivityWithMaskCall(const float *a, const float *b, float *c, const float *selectiveMask, int size)
+    HWY_EXPORT(SelectivityWithGatherScatter);
+    void SelectivityWithGatherScatterCall(const float *a, const float *b, float *c, const int *selectiveIndices, int numIndices, int size)
     {
-        HWY_DYNAMIC_DISPATCH(SelectivityWithMask)
-        (a, b, c, selectiveMask, size);
+        HWY_DYNAMIC_DISPATCH(SelectivityWithGatherScatter)
+        (a, b, c, selectiveIndices, numIndices, size);
     }
 }
 
 const int size = 32;
 
-void inputGen(float *a, float *b, float *selectiveMask)
+void generateInputs(float *a, float *b, int *selectiveIndices, int &numIndices, int size, float selectivityPercent)
 {
+    std::mt19937 rng(std::random_device{}());
+    std::uniform_real_distribution<float> distFloat(0.0f, 100.0f);
+    std::uniform_int_distribution<int> distIndex(0, size - 1);
+
     for (int i = 0; i < size; i++)
     {
-        a[i] = i % 1000;
-        b[i] = i % 100;
-        selectiveMask[i] = (i % 3) != 0;
+        a[i] = distFloat(rng);
+        b[i] = distFloat(rng);
     }
+
+    numIndices = static_cast<int>(size * (selectivityPercent / 100.0f));
+    std::vector<int> indices(size);
+    std::iota(indices.begin(), indices.end(), 0);
+    std::shuffle(indices.begin(), indices.end(), rng);
+
+    for (int i = 0; i < numIndices; i++)
+    {
+        selectiveIndices[i] = indices[i];
+    }
+    std::sort(selectiveIndices, selectiveIndices + numIndices);
+
+    std::cout << "Vector A: ";
+    for (int i = 0; i < size; ++i)
+    {
+        std::cout << a[i] << " ";
+    }
+    std::cout << std::endl << std::endl;
+
+    std::cout << "Vector B: ";
+    for (int i = 0; i < size; ++i)
+    {
+        std::cout << b[i] << " ";
+    }
+    std::cout << std::endl << std::endl;
+
+    std::cout << "Selectivity Vector: ";
+    for (int i = 0; i < numIndices; ++i)
+    {
+        std::cout << selectiveIndices[i] << " ";
+    }
+    std::cout << std::endl << std::endl;
 }
 
 int main()
 {
-    float a[size], b[size];
-    float selectiveMask[size];
-    float c[size] = {0};
-    inputGen(a, b, selectiveMask);
-    hwy::SelectivityWithMaskCall(a, b, c, selectiveMask, size);
+    float a[size], b[size], c[size] = {0};
+    int selectiveIndices[size];
+    int numIndices;
+
+    float selectivityPercent = 50;
+    generateInputs(a, b, selectiveIndices, numIndices, size, selectivityPercent);
+
+    hwy::SelectivityWithGatherScatterCall(a, b, c, selectiveIndices, numIndices, size);
 
     std::cout << "Vector Addition Result: ";
-    for (size_t i = 0; i < size; ++i)
+    for (int i = 0; i < size; ++i)
     {
         std::cout << c[i] << " ";
     }
