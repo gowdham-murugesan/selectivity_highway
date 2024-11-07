@@ -29,12 +29,12 @@ namespace hwy
 
                 auto result = VecA + VecB;
 
-                ScatterIndex(result, df, c, indices);
+                StoreU(result, df, c);
             }
             for (; i < numIndices; i++)
             {
                 int index = selectiveIndices[i];
-                c[index] = a[index] + b[index];
+                c[i] = a[index] + b[index];
             }
         }
     }
@@ -57,7 +57,7 @@ void SelectivityWithNormal(const float *a, const float *b, float *c, const int *
     for (int i = 0; i < numIndices; i++)
     {
         int index = selectiveIndices[i];
-        c[index] = a[index] + b[index];
+        c[i] = a[index] + b[index];
     }
 }
 

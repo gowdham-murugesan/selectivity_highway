@@ -114,7 +114,7 @@ int main()
     hwy::SelectivityWithGatherScatterCall(a, b, c, selectiveIndices, numIndices, size);
 
     std::cout << "Vector Addition Result: ";
-    for (int i = 0; i < size; ++i)
+    for (int i = 0; i < numIndices; ++i)
     {
         std::cout << c[i] << " ";
     }
