@@ -65,8 +65,8 @@ void generateInputs(float *a, float *b, int *selectiveIndices, int &numIndices, 
 
     for (int i = 0; i < size; i++)
     {
-        a[i] = distIndex(rng);
-        b[i] = distIndex(rng);
+        a[i] = distFloat(rng);
+        b[i] = distFloat(rng);
     }
 
     numIndices = static_cast<int>(size * (selectivityPercent / 100.0f));
