@@ -29,14 +29,14 @@ namespace hwy
 
                 auto result = VecA + VecB;
 
-                StoreU(result, df, c);
+                ScatterIndex(result, df, c, indices);
             }
             for (; i < numIndices; i++)
             {
                 int index = selectiveIndices[i];
                 if (index < size)
                 {
-                    c[i] = a[index] + b[index];
+                    c[index] = a[index] + b[index];
                 }
             }
         }
@@ -114,7 +114,7 @@ int main()
     hwy::SelectivityWithGatherScatterCall(a, b, c, selectiveIndices, numIndices, size);
 
     std::cout << "Vector Addition Result: ";
-    for (int i = 0; i < numIndices; ++i)
+    for (int i = 0; i < size; ++i)
     {
         std::cout << c[i] << " ";
     }
