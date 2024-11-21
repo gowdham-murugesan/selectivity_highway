@@ -2,9 +2,6 @@
 #include <vector>
 #include <random>
 #include <algorithm>
-#undef HWY_TARGET_INCLUDE
-#define HWY_TARGET_INCLUDE "benchmark.cpp"
-#include <hwy/foreach_target.h>
 #include <hwy/highway.h>
 #include <benchmark/benchmark.h>
 
@@ -38,9 +35,15 @@ namespace hwy
             }
         }
 
-        void AddWithSelectiveMaskSIMD(const float *a, const float *b, float *c, const float *selectiveMask, int size)
+        void AddWithSelectiveMaskSIMD(const float *a, const float *b, float *c, float *selectiveMask, int size, int numIndices, const int *selectiveIndices)
         {
             const HWY_FULL(float) d;
+
+            for (int i = 0; i < numIndices; i++)
+            {
+                selectiveMask[selectiveIndices[i]] = 1.0f;
+            }
+
             auto allOne = Set(d, 1);
             int i = 0;
             for (; i < size; i += Lanes(d))
@@ -64,18 +67,16 @@ HWY_AFTER_NAMESPACE();
 #if HWY_ONCE
 namespace hwy
 {
-    HWY_EXPORT(AddWithSelectiveGatherScatterSIMD);
     void ExecuteAddWithSelectiveGatherScatterSIMD(const float *a, const float *b, float *c, const int *selectiveIndices, int numIndices, int size)
     {
-        HWY_DYNAMIC_DISPATCH(AddWithSelectiveGatherScatterSIMD)
+        HWY_STATIC_DISPATCH(AddWithSelectiveGatherScatterSIMD)
         (a, b, c, selectiveIndices, numIndices, size);
     }
 
-    HWY_EXPORT(AddWithSelectiveMaskSIMD);
-    void ExecuteAddWithSelectiveMaskSIMD(const float *a, const float *b, float *c, const float *selectiveMask, int size)
+    void ExecuteAddWithSelectiveMaskSIMD(const float *a, const float *b, float *c, float *selectiveMask, int size, int numIndices, const int *selectiveIndices)
     {
-        HWY_DYNAMIC_DISPATCH(AddWithSelectiveMaskSIMD)
-        (a, b, c, selectiveMask, size);
+        HWY_STATIC_DISPATCH(AddWithSelectiveMaskSIMD)
+        (a, b, c, selectiveMask, size, numIndices, selectiveIndices);
     }
 }
 
@@ -88,8 +89,13 @@ void AddWithSelectiveStandard(const float *a, const float *b, float *c, const in
     }
 }
 
-void AddWithSelectiveMaskStandard(const float *a, const float *b, float *c, const float *selectiveMask, int size)
+void AddWithSelectiveMaskStandard(const float *a, const float *b, float *c, float *selectiveMask, int size, int numIndices, const int *selectiveIndices)
 {
+    for (int i = 0; i < numIndices; i++)
+    {
+        selectiveMask[selectiveIndices[i]] = 1.0f;
+    }
+
     for (int i = 0; i < size; i++)
     {
         if (selectiveMask[i])
@@ -120,29 +126,6 @@ void GenerateSelectiveInputs(float *a, float *b, int *selectiveIndices, int &num
         selectiveIndices[i] = indices[i];
     }
     std::sort(selectiveIndices, selectiveIndices + numIndices);
-}
-
-void GenerateInputsWithSelectiveMask(float *a, float *b, float *selectiveMask, float selectivityPercent)
-{
-    std::mt19937 rng(std::random_device{}());
-    std::uniform_real_distribution<float> distFloat(0.0f, 100.0f);
-
-    for (int i = 0; i < size; i++)
-    {
-        a[i] = distFloat(rng);
-        b[i] = distFloat(rng);
-    }
-
-    int numSelected = static_cast<int>(size * (selectivityPercent / 100.0f));
-    std::vector<int> indices(size);
-    std::iota(indices.begin(), indices.end(), 0);
-    std::shuffle(indices.begin(), indices.end(), rng);
-    std::fill(selectiveMask, selectiveMask + size, 0.0f);
-
-    for (int i = 0; i < numSelected; i++)
-    {
-        selectiveMask[indices[i]] = 1.0f;
-    }
 }
 
 static void BenchmarkAddWithSelectiveGatherScatterSIMD(benchmark::State &state)
@@ -178,13 +161,15 @@ static void BenchmarkAddWithSelectiveStandard(benchmark::State &state)
 static void BenchmarkAddWithSelectiveMaskSIMD(benchmark::State &state)
 {
     float a[size], b[size], c[size] = {0};
+    int selectiveIndices[size];
     float selectiveMask[size];
+    int numIndices;
 
     float selectivityPercent = state.range(0);
-    GenerateInputsWithSelectiveMask(a, b, selectiveMask, selectivityPercent);
+    GenerateSelectiveInputs(a, b, selectiveIndices, numIndices, selectivityPercent);
     for (auto _ : state)
     {
-        hwy::ExecuteAddWithSelectiveMaskSIMD(a, b, c, selectiveMask, size);
+        hwy::ExecuteAddWithSelectiveMaskSIMD(a, b, c, selectiveMask, size, numIndices, selectiveIndices);
     }
     benchmark::DoNotOptimize(c);
 }
@@ -192,13 +177,15 @@ static void BenchmarkAddWithSelectiveMaskSIMD(benchmark::State &state)
 static void BenchmarkAddWithSelectiveMaskStandard(benchmark::State &state)
 {
     float a[size], b[size], c[size] = {0};
+    int selectiveIndices[size];
     float selectiveMask[size];
+    int numIndices;
 
     float selectivityPercent = state.range(0);
-    GenerateInputsWithSelectiveMask(a, b, selectiveMask, selectivityPercent);
+    GenerateSelectiveInputs(a, b, selectiveIndices, numIndices, selectivityPercent);
     for (auto _ : state)
     {
-        AddWithSelectiveMaskStandard(a, b, c, selectiveMask, size);
+        AddWithSelectiveMaskStandard(a, b, c, selectiveMask, size, numIndices, selectiveIndices);
     }
     benchmark::DoNotOptimize(c);
 }
