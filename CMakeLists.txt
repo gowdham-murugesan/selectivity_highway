@@ -13,6 +13,8 @@ include_directories(${CMAKE_SOURCE_DIR})
 
 add_executable(main main.cpp)
 add_executable(benchmark benchmark.cpp)
+add_executable(benchmarkBitmask benchmarkBitmask.cpp)
 
 target_link_libraries(main hwy::hwy)
 target_link_libraries(benchmark hwy::hwy benchmark::benchmark)
+target_link_libraries(benchmarkBitmask hwy::hwy benchmark::benchmark)
